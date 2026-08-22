@@ -1,0 +1,11 @@
+---
+name: "Test"
+
+"on":
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  lint-unit:
+    uses: test-kitchen/.github/.github/workflows/lint-unit.yml@main
