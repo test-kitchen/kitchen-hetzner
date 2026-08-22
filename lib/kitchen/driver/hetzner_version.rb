@@ -14,6 +14,6 @@
 module Kitchen
   module Driver
     # Version string for the kitchen-hetzner gem.
-    HETZNER_VERSION = "0.1.0".freeze
+    HETZNER_VERSION = "0.2.0".freeze
   end
 end
