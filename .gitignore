@@ -1,0 +1,9 @@
+*.gem
+.bundle/
+.kitchen/
+.yardoc/
+Gemfile.lock
+coverage/
+doc/
+pkg/
+tmp/
