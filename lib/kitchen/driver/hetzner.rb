@@ -25,6 +25,7 @@ require_relative "hcloud/image_map"
 require_relative "hcloud/ssh_key"
 
 module Kitchen
+  # Test Kitchen's driver plugins.
   module Driver
     # A Test Kitchen driver that runs instances on Hetzner Cloud.
     #

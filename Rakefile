@@ -14,7 +14,15 @@ end
 
 begin
   require "yard"
+
+  # Options and the file list live in .yardopts so that a bare `yard` from the
+  # command line produces exactly what `rake docs` does.
   YARD::Rake::YardocTask.new(:docs)
+
+  desc "List anything in lib/ that is still undocumented"
+  task :doc_coverage do
+    sh "yard stats --list-undoc"
+  end
 rescue LoadError
   puts "yard is not available. (sudo) gem install yard to generate documentation."
 end
