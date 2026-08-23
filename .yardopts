@@ -1,6 +1,10 @@
 --markup markdown
---readme README.md
 --output-dir doc
+--readme README.md
+--title "kitchen-hetzner"
+--protected
+--private
 lib/**/*.rb
 -
 CHANGELOG.md
+LICENSE
