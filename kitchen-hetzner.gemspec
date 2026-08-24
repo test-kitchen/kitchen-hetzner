@@ -21,7 +21,7 @@ Gem::Specification.new do |spec|
   # ships inside Cinc Workstation and Chef Workstation, where each additional
   # dependency (especially a native extension) is a packaging liability. The
   # Hetzner Cloud API surface used here is small enough for Net::HTTP.
-  spec.add_dependency "test-kitchen", ">= 3.0", "< 6"
+  spec.add_dependency "test-kitchen", ">= 3.0", "< 5"
 
   spec.metadata = {
     "bug_tracker_uri" => "https://github.com/test-kitchen/kitchen-hetzner/issues",
