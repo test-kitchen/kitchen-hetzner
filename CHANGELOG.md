@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1](https://github.com/test-kitchen/kitchen-hetzner/compare/kitchen-hetzner/v0.2.0...kitchen-hetzner/v0.2.1) (2026-08-24)
+
+
+### Bug Fixes
+
+* do not allow a test-kitchen 5 that does not exist ([41aa255](https://github.com/test-kitchen/kitchen-hetzner/commit/41aa2559937f8c123cfc3dd05a2e036cc148bacc))
+* do not allow a test-kitchen 5 that does not exist ([ea8c27d](https://github.com/test-kitchen/kitchen-hetzner/commit/ea8c27dc0a8f0509006262b2f3c189b0d1fb1b07))
+
 ## [0.2.0](https://github.com/test-kitchen/kitchen-hetzner/compare/kitchen-hetzner-v0.1.0...kitchen-hetzner/v0.2.0) (2026-08-22)
 
 Initial release of the Hetzner Cloud driver for Test Kitchen.
