@@ -246,6 +246,76 @@ RSpec.describe Kitchen::Driver::Hetzner do
         expect { driver.create(state) }.to raise_error(Kitchen::ActionFailed, /image not found/)
       end
     end
+
+    describe "when the server never becomes reachable" do
+      # The likeliest way to leak a server: the API is perfectly happy, the
+      # machine boots, and SSH never comes up. wait_until_ready raises
+      # TransportFailed, which is a sibling of ActionFailed rather than a
+      # subclass, so the server is running and billing when it does.
+      before do
+        stub_successful_create
+        allow(api_client).to receive(:delete_server).and_return(true)
+        allow(api_client).to receive(:delete_ssh_key).and_return(true)
+        allow(connection).to receive(:wait_until_ready)
+          .and_raise(Kitchen::Transport::TransportFailed.new("SSH session could not be established"))
+      end
+
+      it "destroys the server rather than leaving it running and billing" do
+        expect(api_client).to receive(:delete_server).with(42)
+        expect { driver.create(state) }.to raise_error(Kitchen::ActionFailed)
+      end
+
+      it "deletes the throwaway SSH key" do
+        expect(api_client).to receive(:delete_ssh_key).with(7)
+        expect { driver.create(state) }.to raise_error(Kitchen::ActionFailed)
+      end
+
+      it "reports the transport failure" do
+        expect { driver.create(state) }
+          .to raise_error(Kitchen::ActionFailed, /SSH session could not be established/)
+      end
+
+      it "leaves no server behind in state, so a retry starts clean" do
+        expect { driver.create(state) }.to raise_error(Kitchen::ActionFailed)
+        expect(state[:server_id]).to be_nil
+        expect(state[:hostname]).to be_nil
+      end
+    end
+
+    describe "when uploading the SSH key fails" do
+      before do
+        allow(api_client).to receive(:create_ssh_key)
+          .and_raise(Kitchen::Driver::Hcloud::ApiError.new("rate limited", status: 429))
+      end
+
+      it "does not leave the generated private key on disk" do
+        expect { driver.create(state) }.to raise_error(Kitchen::ActionFailed)
+        expect(Dir.glob(File.join(kitchen_root, ".kitchen", "hetzner", "*.pem"))).to be_empty
+      end
+
+      it "leaves nothing behind in state" do
+        expect { driver.create(state) }.to raise_error(Kitchen::ActionFailed)
+        expect(state).not_to have_key(:ssh_key)
+        expect(state).not_to have_key(:hetzner_ssh_key_path)
+      end
+    end
+
+    describe "when the failure is not one Test Kitchen raised" do
+      before do
+        allow(api_client).to receive(:create_ssh_key).and_return("id" => 7)
+        allow(api_client).to receive(:delete_ssh_key).and_return(true)
+        allow(api_client).to receive(:create_server).and_raise(Errno::ENOENT, "somewhere")
+      end
+
+      it "names the error class, which is otherwise unidentifiable" do
+        expect { driver.create(state) }.to raise_error(Kitchen::ActionFailed, /Errno::ENOENT/)
+      end
+
+      it "still cleans up" do
+        expect(api_client).to receive(:delete_ssh_key).with(7)
+        expect { driver.create(state) }.to raise_error(Kitchen::ActionFailed)
+      end
+    end
   end
 
   describe "#destroy" do
