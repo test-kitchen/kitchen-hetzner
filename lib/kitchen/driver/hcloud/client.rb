@@ -13,6 +13,7 @@
 
 require "json" unless defined?(JSON)
 require "net/http" unless defined?(Net::HTTP)
+require "openssl" unless defined?(OpenSSL)
 require "uri" unless defined?(URI)
 
 require_relative "api_error"
@@ -64,14 +65,31 @@ module Kitchen
         PER_PAGE = 50
 
         # Network-level failures that are safe to retry.
+        #
+        # Every request this client makes is either idempotent or a create that
+        # a failed connection means never happened, so the list is deliberately
+        # broad. Anything missing from it does not merely skip the retry: it
+        # escapes as a raw exception rather than an {ApiError}, and the driver
+        # reports an unexpected crash instead of an action failure.
         RETRIABLE_EXCEPTIONS = [
+          Errno::ECONNABORTED,
           Errno::ECONNREFUSED,
           Errno::ECONNRESET,
           Errno::EHOSTUNREACH,
+          Errno::ENETDOWN,
+          Errno::ENETRESET,
+          Errno::ENETUNREACH,
+          Errno::EPIPE,
           Errno::ETIMEDOUT,
-          EOFError,
-          Net::OpenTimeout,
-          Net::ReadTimeout,
+          # EOFError is an IOError; Net::OpenTimeout and Net::ReadTimeout are
+          # both Timeout::Error. Net::HTTPBadResponse is neither -- it is a bare
+          # StandardError -- so it has to be named.
+          IOError,
+          Timeout::Error,
+          Net::HTTPBadResponse,
+          # A TLS handshake reset mid-flight. Not an IOError, and the one this
+          # list most often lacked.
+          OpenSSL::SSL::SSLError,
           SocketError,
         ].freeze
 
@@ -253,7 +271,9 @@ module Kitchen
             results.concat(response[key] || [])
 
             next_page = response.dig("meta", "pagination", "next_page")
-            break if next_page.nil?
+            # A next_page that does not advance would loop forever, appending
+            # the same page to the results until the process runs out of memory.
+            break if next_page.nil? || next_page.to_i <= page
 
             page = next_page
           end

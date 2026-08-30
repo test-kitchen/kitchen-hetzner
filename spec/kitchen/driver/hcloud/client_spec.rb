@@ -197,6 +197,14 @@ RSpec.describe Kitchen::Driver::Hcloud::Client do
       expect(client.servers.map { |s| s["id"] }).to eq([1, 2])
     end
 
+    it "stops rather than looping when the API does not advance the page" do
+      stub_request(:get, "#{api_root}/servers?page=1&per_page=50")
+        .to_return(json("servers" => [server_payload],
+          "meta" => { "pagination" => { "next_page" => 1 } }))
+
+      expect(client.servers.length).to eq(1)
+    end
+
     it "returns an empty array when there are no servers" do
       stub_request(:get, "#{api_root}/servers").with(query: hash_including({}))
         .to_return(json("servers" => [], "meta" => { "pagination" => { "next_page" => nil } }))
@@ -333,6 +341,36 @@ RSpec.describe Kitchen::Driver::Hcloud::Client do
       limited = described_class.new(token: "t", api_root: api_root, max_retries: 1, sleeper: sleeper)
       expect { limited.server(42) }
         .to raise_error(Kitchen::Driver::Hcloud::ApiError, /SocketError.*no dns/)
+    end
+
+    # Anything missing from RETRIABLE_EXCEPTIONS does not merely skip the
+    # retry -- it escapes as a raw exception rather than an ApiError, and the
+    # driver reports an unexpected crash instead of an action failure.
+    {
+      "a TLS handshake reset" => OpenSSL::SSL::SSLError.new("read server hello A"),
+      "an unroutable network" => Errno::ENETUNREACH.new("api.hetzner.cloud"),
+      "a broken pipe" => Errno::EPIPE.new("api.hetzner.cloud"),
+      "a truncated response" => EOFError.new("end of file reached"),
+      "a malformed status line" => Net::HTTPBadResponse.new("wrong status line"),
+      "an open timeout" => Net::OpenTimeout.new("execution expired"),
+      "a read timeout" => Net::ReadTimeout.new("execution expired"),
+    }.each do |description, error|
+      it "retries #{description}" do
+        stub_request(:get, "#{api_root}/servers/42")
+          .to_raise(error).then
+          .to_return(json("server" => server_payload))
+
+        expect(client.server(42)["id"]).to eq(42)
+        expect(slept.length).to eq(1)
+      end
+
+      it "reports #{description} as an ApiError once the budget is spent" do
+        stub_request(:get, "#{api_root}/servers/42").to_raise(error)
+
+        limited = described_class.new(token: "t", api_root: api_root, max_retries: 1, sleeper: sleeper)
+        expect { limited.server(42) }
+          .to raise_error(Kitchen::Driver::Hcloud::ApiError, /Hetzner API request failed/)
+      end
     end
   end
 
