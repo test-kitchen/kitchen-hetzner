@@ -257,6 +257,21 @@ bundle exec rake         # test + style
 The unit tests are offline: HTTP is stubbed with WebMock and no API token is
 needed.
 
+Stubbing at the wire proves the driver sends the right request, not that Hetzner
+accepts it. The suites in [`integration/`](integration/README.md) close that gap
+— each creates a real server and asserts, on the instance, that it was
+configured as asked:
+
+```shell
+export HCLOUD_TOKEN="your-token-here"
+bundle exec rake integration:list
+bundle exec rake integration:test
+bundle exec rake integration:destroy   # after a failed run
+```
+
+They are not part of `rake default` — they cost money — and never run on a pull
+request. Maintainers run them on demand, and weekly against `main`.
+
 ## Contributing
 
 Bug reports and pull requests are welcome at

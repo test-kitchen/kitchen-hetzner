@@ -1,0 +1,8 @@
+---
+extends: default
+rules:
+  # Workflow expressions and hcloud commands do not wrap usefully; warn rather
+  # than fail so that a genuinely long line does not block a build.
+  line-length:
+    max: 256
+    level: warning
