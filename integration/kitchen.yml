@@ -1,0 +1,124 @@
+---
+# Integration suites for kitchen-hetzner. Each one creates a real server in a
+# real Hetzner Cloud project and asserts, on the instance, that the driver
+# configured it the way the suite asked for.
+#
+# See integration/README.md for how to run these.
+
+driver:
+  name: hetzner
+  location: <%= ENV.fetch("KITCHEN_HETZNER_LOCATION", "fsn1") %>
+  server_type: <%= ENV.fetch("KITCHEN_HETZNER_SERVER_TYPE", "cx22") %>
+  labels:
+    # Deliberately contains a space. Hetzner rejects it outright, so a broken
+    # sanitize_label fails every suite at create rather than going unnoticed.
+    created-by: kitchen-hetzner integration
+    # Tagged onto every server, so one that leaks can be traced back to the run
+    # that made it.
+    run-id: <%= ENV.fetch("KITCHEN_RUN_ID", "local") %>
+
+# Assertions live in the provisioner rather than a verifier: the script is
+# transferred over the driver's own transport and executed on the instance, so
+# reaching the machine at all is part of every assertion, a non-zero exit fails
+# the suite, and there is no verifier licence to satisfy.
+provisioner:
+  name: shell
+  script: scripts/assert.sh
+
+verifier:
+  name: shell
+
+platforms:
+  - name: ubuntu-24.04
+  - name: almalinux-9
+  - name: debian-12
+
+suites:
+  # The whole default path: no image, no server name, no keys configured. The
+  # driver picks the image from the platform name, generates a throwaway
+  # keypair, uploads it, and names the server after the instance.
+  - name: default
+    includes: [ubuntu-24.04]
+    provisioner:
+      arguments:
+        - metadata
+        - key
+        - hostname-prefix=default-ubuntu-2404-
+        - os=ubuntu
+        - os-version=24.04
+        - arch=x86_64
+        - location=<%= ENV.fetch("KITCHEN_HETZNER_LOCATION", "fsn1") %>
+
+  # ImageMap rewrites `almalinux' to Hetzner's `alma'. A wrong alias is
+  # invisible to a unit test, which only ever compares it to itself; the only
+  # thing that can tell you `alma-9' is real is booting it.
+  - name: image-alias
+    includes: [almalinux-9]
+    provisioner:
+      arguments:
+        - metadata
+        - key
+        - os=almalinux
+        - os-version=9
+
+  # The other half of that: a platform name ImageMap passes straight through
+  # has to be a real slug too.
+  - name: passthrough-image
+    includes: [debian-12]
+    provisioner:
+      arguments:
+        - metadata
+        - key
+        - os=debian
+        - os-version=12
+
+  # Hetzner's Arm64 types. The image slug is the same; the architecture follows
+  # the server type, which is the part of the README most likely to go stale.
+  - name: arm64
+    includes: [ubuntu-24.04]
+    driver:
+      server_type: cax11
+    provisioner:
+      arguments:
+        - metadata
+        - key
+        - arch=aarch64
+        - os=ubuntu
+
+  # user_data has to reach cloud-init intact, which means the driver has to send
+  # it and not send it as an empty string when it is unset.
+  - name: user-data
+    includes: [ubuntu-24.04]
+    driver:
+      user_data: |
+        #cloud-config
+        write_files:
+          - path: /etc/kitchen-hetzner-user-data
+            content: "user_data reached cloud-init"
+    provisioner:
+      arguments:
+        - metadata
+        - file=/etc/kitchen-hetzner-user-data
+        - file-contains=/etc/kitchen-hetzner-user-data:user_data reached cloud-init
+
+  # A location other than the default, so that the option is proven to reach the
+  # API rather than merely being accepted.
+  - name: location
+    includes: [ubuntu-24.04]
+    driver:
+      location: nbg1
+    provisioner:
+      arguments:
+        - metadata
+        - location=nbg1
+
+  # server_name bypasses the generated name entirely, including its uniqueness
+  # suffix, so it carries the run id to stay unique within the project.
+  - name: server-name
+    includes: [ubuntu-24.04]
+    driver:
+      server_name: kitchen-hetzner-named-<%= ENV.fetch("KITCHEN_RUN_ID", "local") %>
+    provisioner:
+      arguments:
+        - metadata
+        - hostname=kitchen-hetzner-named-<%= ENV.fetch("KITCHEN_RUN_ID", "local") %>
