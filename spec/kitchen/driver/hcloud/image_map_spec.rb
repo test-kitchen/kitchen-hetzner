@@ -17,6 +17,13 @@ RSpec.describe Kitchen::Driver::Hcloud::ImageMap do
     it "renames families whose Test Kitchen name differs from the Hetzner slug" do
       expect(described_class.image_for("almalinux-9")).to eq("alma-9")
       expect(described_class.image_for("almalinux-8")).to eq("alma-8")
+      expect(described_class.image_for("rockylinux-9")).to eq("rocky-9")
+      expect(described_class.image_for("rockylinux-8")).to eq("rocky-8")
+    end
+
+    it "leaves a name that is already a Hetzner slug alone" do
+      expect(described_class.image_for("alma-9")).to eq("alma-9")
+      expect(described_class.image_for("rocky-9")).to eq("rocky-9")
     end
 
     it "leaves multi-part family names intact" do

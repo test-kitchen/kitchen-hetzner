@@ -33,6 +33,7 @@ module Kitchen
         # @return [Hash{String => String}]
         FAMILY_ALIASES = {
           "almalinux" => "alma",
+          "rockylinux" => "rocky",
         }.freeze
 
         # Platform name prefixes that Hetzner Cloud cannot boot at all.
