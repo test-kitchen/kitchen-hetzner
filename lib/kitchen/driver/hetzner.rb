@@ -105,9 +105,15 @@ module Kitchen
           ssh_key_ids = provision_ssh_key(state)
           provision_server(state, ssh_key_ids)
           await_ssh(state)
-        rescue Hcloud::ApiError, Kitchen::ActionFailed => e
+        rescue ::StandardError => e
+          # Deliberately every error, not a hand-picked list. By this point a
+          # server may already be running and billing, and the most likely
+          # failure is the last step: `wait_until_ready` raises
+          # Kitchen::Transport::TransportFailed, which is a sibling of
+          # ActionFailed rather than a subclass, so naming the expected classes
+          # is exactly how a server gets left behind.
           cleanup_after_failed_create(state)
-          raise Kitchen::ActionFailed, e.message
+          raise Kitchen::ActionFailed, error_summary(e)
         end
       end
 
@@ -228,6 +234,13 @@ module Kitchen
         debug("Generating an ephemeral SSH keypair at #{path}")
         key.write(path)
 
+        # Recorded before the upload, not after: if the upload fails, the
+        # private key is already on disk and only state can lead cleanup to it.
+        # :hetzner_ssh_key_path is this driver's own key, so cleanup can tell a
+        # file it wrote from a :ssh_key that came from somewhere else.
+        state[:hetzner_ssh_key_path] = path
+        state[:ssh_key] = path
+
         created = with_api_errors do
           client.create_ssh_key(
             name: name,
@@ -237,7 +250,6 @@ module Kitchen
         end
 
         state[:hetzner_ssh_key_id] = created["id"]
-        state[:ssh_key] = path
 
         [created["id"]]
       end
@@ -303,7 +315,7 @@ module Kitchen
       # @param state [Hash] mutable instance state
       # @return [void]
       def cleanup_after_failed_create(state)
-        return unless state[:server_id] || state[:hetzner_ssh_key_id]
+        return unless state[:server_id] || state[:hetzner_ssh_key_id] || state[:hetzner_ssh_key_path]
 
         warn("Cleaning up partially created Hetzner resources after a failed create...")
         destroy(state)
@@ -317,14 +329,36 @@ module Kitchen
       # @return [void]
       def destroy_ephemeral_key(state)
         key_id = state.delete(:hetzner_ssh_key_id)
-        path = state.delete(:ssh_key)
+        ssh_key = state.delete(:ssh_key)
+
+        # Deleted whenever this driver wrote it, even with no key_id: the file
+        # is written before the upload, so a create that failed at the upload
+        # leaves a private key on disk with no Hetzner key to match it. The
+        # fallback covers state files written before the path was recorded
+        # separately, and is only safe because a key we uploaded implies a key
+        # we generated.
+        path = state.delete(:hetzner_ssh_key_path) || (key_id ? ssh_key : nil)
 
         if key_id
           debug("Deleting ephemeral Hetzner SSH key <#{key_id}>")
           with_api_errors { client.delete_ssh_key(key_id) }
         end
 
-        File.delete(path) if key_id && path && File.exist?(path)
+        File.delete(path) if path && File.exist?(path)
+      end
+
+      # Describes a create failure for the error Test Kitchen shows the user.
+      #
+      # Test Kitchen's own errors already read well on their own. Anything else
+      # -- an Errno from writing the key file, a bug in this driver -- is not
+      # identifiable without its class name.
+      #
+      # @param error [::StandardError] the failure to describe
+      # @return [String] the message to raise
+      def error_summary(error)
+        return error.message if error.is_a?(Kitchen::Error) || error.is_a?(Hcloud::ApiError)
+
+        "#{error.class}: #{error.message}"
       end
 
       # Extracts the public IPv4 address from a server hash.

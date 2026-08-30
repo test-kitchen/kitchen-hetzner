@@ -117,9 +117,9 @@ passed straight through. Only genuine mismatches are translated:
 | ------------------------- | ------------- |
 | `ubuntu-24.04` | `ubuntu-24.04` |
 | `debian-12` | `debian-12` |
-| `rocky-9` | `rocky-9` |
 | `centos-stream-9` | `centos-stream-9` |
 | `almalinux-9` | `alma-9` |
+| `rockylinux-9` | `rocky-9` |
 
 Set `image` explicitly to use anything else, including your own snapshots:
 
