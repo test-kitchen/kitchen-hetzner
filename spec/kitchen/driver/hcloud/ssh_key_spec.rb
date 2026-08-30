@@ -60,6 +60,23 @@ RSpec.describe Kitchen::Driver::Hcloud::SshKey do
     end
   end
 
+  # The public key is an SSH wire-format blob, and the two edge cases in its
+  # integer encoding never show up in a valid key: an RSA modulus always has its
+  # high bit set, and a real exponent is never zero.
+  describe "mpint encoding" do
+    it "pads a value whose high bit is set, so it is not read back as negative" do
+      expect(key.send(:ssh_mpint, OpenSSL::BN.new(0x80))).to eq("\x00\x00\x00\x02\x00\x80".b)
+    end
+
+    it "leaves a value whose high bit is clear alone" do
+      expect(key.send(:ssh_mpint, OpenSSL::BN.new(0x7f))).to eq("\x00\x00\x00\x01\x7f".b)
+    end
+
+    it "encodes zero as a single padding byte rather than nothing at all" do
+      expect(key.send(:ssh_mpint, OpenSSL::BN.new(0))).to eq("\x00\x00\x00\x01\x00".b)
+    end
+  end
+
   describe "#write" do
     it "writes a PEM private key readable by OpenSSL" do
       Dir.mktmpdir do |dir|

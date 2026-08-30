@@ -6,18 +6,6 @@ RSpec.describe Kitchen::Driver::Hcloud::Client do
   let(:sleeper) { ->(seconds) { slept << seconds } }
   let(:client) { described_class.new(token: "sekret", api_root: api_root, sleeper: sleeper) }
 
-  def json(body)
-    { status: 200, body: JSON.generate(body), headers: { "Content-Type" => "application/json" } }
-  end
-
-  def error_json(status, code, message)
-    {
-      status: status,
-      body: JSON.generate("error" => { "code" => code, "message" => message }),
-      headers: { "Content-Type" => "application/json" },
-    }
-  end
-
   describe "#initialize" do
     it "rejects a missing token" do
       expect { described_class.new(token: nil) }.to raise_error(ArgumentError, /token is required/)
@@ -197,6 +185,14 @@ RSpec.describe Kitchen::Driver::Hcloud::Client do
       expect(client.servers.map { |s| s["id"] }).to eq([1, 2])
     end
 
+    it "sends no label selector when none is asked for" do
+      stub = stub_request(:get, "#{api_root}/servers").with(query: { "page" => "1", "per_page" => "50" })
+        .to_return(json("servers" => [], "meta" => { "pagination" => { "next_page" => nil } }))
+
+      client.servers
+      expect(stub).to have_been_requested
+    end
+
     it "returns an empty array when there are no servers" do
       stub_request(:get, "#{api_root}/servers").with(query: hash_including({}))
         .to_return(json("servers" => [], "meta" => { "pagination" => { "next_page" => nil } }))
@@ -220,11 +216,36 @@ RSpec.describe Kitchen::Driver::Hcloud::Client do
       expect(client.delete_ssh_key(7)).to be true
     end
 
+    it "raises when deleting a key fails for any other reason" do
+      stub_request(:delete, "#{api_root}/ssh_keys/7")
+        .to_return(error_json(403, "forbidden", "not your key"))
+
+      expect { client.delete_ssh_key(7) }
+        .to raise_error(Kitchen::Driver::Hcloud::ApiError, /not your key/)
+    end
+
     it "treats an already-deleted key as success" do
       stub_request(:delete, "#{api_root}/ssh_keys/7")
         .to_return(error_json(404, "not_found", "ssh key not found"))
 
       expect(client.delete_ssh_key(7)).to be false
+    end
+  end
+
+  describe "#action" do
+    it "fetches a single action" do
+      stub_request(:get, "#{api_root}/actions/1001")
+        .to_return(json("action" => action_payload))
+
+      expect(client.action(1001)["command"]).to eq("create_server")
+    end
+
+    it "raises when the action does not exist" do
+      stub_request(:get, "#{api_root}/actions/1001")
+        .to_return(error_json(404, "not_found", "action not found"))
+
+      expect { client.action(1001) }
+        .to raise_error(Kitchen::Driver::Hcloud::ApiError, /action not found/)
     end
   end
 
@@ -333,6 +354,27 @@ RSpec.describe Kitchen::Driver::Hcloud::Client do
       limited = described_class.new(token: "t", api_root: api_root, max_retries: 1, sleeper: sleeper)
       expect { limited.server(42) }
         .to raise_error(Kitchen::Driver::Hcloud::ApiError, /SocketError.*no dns/)
+    end
+  end
+
+  describe "internals" do
+    it "refuses an HTTP verb it cannot build a request for" do
+      expect { client.send(:request_class, :put) }
+        .to raise_error(ArgumentError, /unsupported HTTP method: put/)
+    end
+
+    # A Retry-After of "0", or one Hetzner ever sends as a date rather than a
+    # number, must not turn into a zero-second retry loop.
+    it "ignores a Retry-After that is not a positive number of seconds" do
+      ["0", "-5", "Wed, 21 Oct 2026 07:28:00 GMT", ""].each do |header|
+        slept.clear
+        stub_request(:get, "#{api_root}/servers/42")
+          .to_return(status: 503, headers: { "Retry-After" => header }).then
+          .to_return(json("server" => server_payload))
+
+        expect(client.server(42)["id"]).to eq(42)
+        expect(slept).to eq([1]), "Retry-After: #{header.inspect} slept #{slept.inspect}"
+      end
     end
   end
 
