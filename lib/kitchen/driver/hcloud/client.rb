@@ -357,8 +357,8 @@ module Kitchen
 
           Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == "https",
             open_timeout: OPEN_TIMEOUT, read_timeout: READ_TIMEOUT) do |http|
-              http.request(req)
-            end
+            http.request(req)
+          end
         end
 
         # Maps an HTTP verb to its `Net::HTTP` request class.
