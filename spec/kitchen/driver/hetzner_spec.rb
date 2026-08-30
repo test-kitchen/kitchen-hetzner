@@ -11,27 +11,42 @@ RSpec.describe Kitchen::Driver::Hetzner do
   let(:kitchen_root) { Dir.mktmpdir }
   let(:state) { {} }
 
-  let(:connection) { instance_double("Kitchen::Transport::Ssh::Connection", wait_until_ready: true) }
-  let(:transport) { double("transport", connection: connection) }
+  # Verifying doubles throughout: a loose double would keep passing after a
+  # rename in test-kitchen, which is the one thing these specs cannot catch on
+  # their own.
+  let(:connection) { instance_double(Kitchen::Transport::Ssh::Connection, wait_until_ready: true) }
+  let(:transport) { instance_double(Kitchen::Transport::Ssh, connection: connection) }
+  let(:platform) { instance_double(Kitchen::Platform, name: platform_name) }
 
   let(:instance) do
-    double(
+    instance_double(
+      Kitchen::Instance,
       name: instance_name,
       logger: logger,
       to_str: "instance",
-      platform: double(name: platform_name),
+      platform: platform,
       transport: transport
     )
   end
 
   let(:config) { { hetzner_token: "sekret", kitchen_root: kitchen_root } }
-  let(:driver) { described_class.new(config) }
+  let(:driver) { build_driver(config) }
 
   let(:api_client) { instance_double(Kitchen::Driver::Hcloud::Client) }
 
-  before do
-    allow_any_instance_of(described_class).to receive(:instance).and_return(instance)
-    allow(driver).to receive(:client).and_return(api_client)
+  before { allow(driver).to receive(:client).and_return(api_client) }
+
+  # Builds a driver the way Test Kitchen does, rather than stubbing #instance
+  # on it. finalize_config! is what runs the required_config validations, so
+  # anything the driver rejects is rejected here too.
+  #
+  # The hash is passed through untouched, not copied: examples that adjust
+  # `config` after the driver exists rely on the driver holding the same hash.
+  #
+  # @param attrs [Hash] driver configuration
+  # @return [Kitchen::Driver::Hetzner] a configured driver
+  def build_driver(attrs)
+    described_class.new(attrs).tap { |d| d.finalize_config!(instance) }
   end
 
   after { FileUtils.remove_entry(kitchen_root) if File.directory?(kitchen_root) }
@@ -76,7 +91,7 @@ RSpec.describe Kitchen::Driver::Hetzner do
     end
 
     it "lets an explicit image win over the platform name" do
-      driver = described_class.new(hetzner_token: "t", image: "my-snapshot-123")
+      driver = build_driver(hetzner_token: "t", image: "my-snapshot-123")
       expect(driver[:image]).to eq("my-snapshot-123")
     end
 
@@ -84,6 +99,49 @@ RSpec.describe Kitchen::Driver::Hetzner do
       allow(ENV).to receive(:[]).and_call_original
       allow(ENV).to receive(:[]).with("HCLOUD_TOKEN").and_return("from-env")
       expect(described_class.new({})[:hetzner_token]).to eq("from-env")
+    end
+
+    it "falls back to HETZNER_TOKEN when HCLOUD_TOKEN is unset" do
+      allow(ENV).to receive(:[]).and_call_original
+      allow(ENV).to receive(:[]).with("HCLOUD_TOKEN").and_return(nil)
+      allow(ENV).to receive(:[]).with("HETZNER_TOKEN").and_return("the-other-one")
+      expect(described_class.new({})[:hetzner_token]).to eq("the-other-one")
+    end
+
+    it "lets a configured token win over the environment" do
+      allow(ENV).to receive(:[]).and_call_original
+      allow(ENV).to receive(:[]).with("HCLOUD_TOKEN").and_return("from-env")
+      expect(build_driver(hetzner_token: "explicit")[:hetzner_token]).to eq("explicit")
+    end
+
+    describe "with no token anywhere" do
+      before do
+        allow(ENV).to receive(:[]).and_call_original
+        allow(ENV).to receive(:[]).with("HCLOUD_TOKEN").and_return(nil)
+        allow(ENV).to receive(:[]).with("HETZNER_TOKEN").and_return(nil)
+      end
+
+      # Validation happens in finalize_config!, so an unusable driver is
+      # rejected before any action runs rather than as an HTTP 401 later.
+      it "refuses to configure, naming the environment variable to set" do
+        expect { build_driver({}) }
+          .to raise_error(Kitchen::UserError, /HCLOUD_TOKEN environment variable/)
+      end
+
+      it "refuses an empty token as well as a missing one" do
+        expect { build_driver(hetzner_token: "") }
+          .to raise_error(Kitchen::UserError, /token is required/)
+      end
+    end
+
+    it "builds the client against the configured api_url" do
+      driver = build_driver(hetzner_token: "t", api_url: "https://api.example.test/v1")
+      expect(driver.send(:client).api_root).to eq("https://api.example.test/v1")
+    end
+
+    it "defaults the create timeout to the client's own" do
+      expect(driver[:server_ready_timeout])
+        .to eq(Kitchen::Driver::Hcloud::Client::ACTION_TIMEOUT)
     end
 
     it "reports its version and API level for diagnostics" do
@@ -148,12 +206,47 @@ RSpec.describe Kitchen::Driver::Hetzner do
       driver.create(state)
     end
 
+    it "records a configured username and port for the transport" do
+      config[:username] = "admin"
+      config[:port] = 2222
+      stub_successful_create
+
+      driver.create(state)
+      expect(state[:username]).to eq("admin")
+      expect(state[:port]).to eq(2222)
+    end
+
+    it "gives the create action the configured timeout" do
+      config[:server_ready_timeout] = 90
+      stub_successful_create
+      expect(api_client).to receive(:wait_for_action).with(anything, timeout: 90)
+
+      driver.create(state)
+    end
+
+    it "writes the throwaway key under the kitchen root, not the working directory" do
+      stub_successful_create
+      driver.create(state)
+
+      expect(state[:ssh_key])
+        .to eq(File.join(kitchen_root, ".kitchen", "hetzner", "#{instance_name}.pem"))
+    end
+
     it "falls back to a fresh lookup when the create response has no address yet" do
       stub_successful_create(server: server_payload("public_net" => { "ipv4" => nil }))
       allow(api_client).to receive(:server).and_return(server_payload)
 
       driver.create(state)
       expect(state[:hostname]).to eq("203.0.113.10")
+    end
+
+    it "treats an empty address string as no address at all" do
+      blank = server_payload("public_net" => { "ipv4" => { "ip" => "" } })
+      stub_successful_create(server: blank)
+      allow(api_client).to receive(:delete_server).and_return(true)
+      allow(api_client).to receive(:delete_ssh_key).and_return(true)
+
+      expect { driver.create(state) }.to raise_error(Kitchen::ActionFailed, /public IPv4/)
     end
 
     it "fails clearly when the server never gets a public IPv4 address" do
@@ -324,6 +417,14 @@ RSpec.describe Kitchen::Driver::Hetzner do
   end
 
   describe "#status" do
+    it "reports an API failure as an action failure rather than crashing" do
+      allow(api_client).to receive(:server)
+        .and_raise(Kitchen::Driver::Hcloud::ApiError.new("token revoked", status: 401))
+
+      expect { driver.status(server_id: 42) }
+        .to raise_error(Kitchen::ActionFailed, /token revoked/)
+    end
+
     it "reports unknown when nothing has been created" do
       expect(driver.status(state)).to include(live: nil, state: "unknown")
     end
@@ -351,6 +452,13 @@ RSpec.describe Kitchen::Driver::Hetzner do
   end
 
   describe "#doctor" do
+    it "reports an API failure as an action failure rather than crashing" do
+      allow(api_client).to receive(:servers)
+        .and_raise(Kitchen::Driver::Hcloud::ApiError.new("token revoked", status: 401))
+
+      expect { driver.doctor({}) }.to raise_error(Kitchen::ActionFailed, /token revoked/)
+    end
+
     it "reports nothing when every labelled server has local state" do
       state[:server_id] = 42
       allow(api_client).to receive(:servers).and_return([server_payload("id" => 42)])
@@ -385,6 +493,23 @@ RSpec.describe Kitchen::Driver::Hetzner do
       File.write(File.join(kitchen_root, ".kitchen", "default-debian-12.yml"),
         YAML.dump(server_id: 99))
       allow(api_client).to receive(:servers).and_return([server_payload("id" => 99)])
+
+      expect(driver.doctor(state)).to be false
+    end
+
+    it "reads a state file written with string keys" do
+      FileUtils.mkdir_p(File.join(kitchen_root, ".kitchen"))
+      File.write(File.join(kitchen_root, ".kitchen", "default-debian-12.yml"),
+        YAML.dump("server_id" => 99))
+      allow(api_client).to receive(:servers).and_return([server_payload("id" => 99)])
+
+      expect(driver.doctor(state)).to be false
+    end
+
+    it "ignores a state file that is valid YAML but not a hash" do
+      FileUtils.mkdir_p(File.join(kitchen_root, ".kitchen"))
+      File.write(File.join(kitchen_root, ".kitchen", "odd.yml"), YAML.dump(%w{not a hash}))
+      allow(api_client).to receive(:servers).and_return([])
 
       expect(driver.doctor(state)).to be false
     end
